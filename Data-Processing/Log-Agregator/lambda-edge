@@ -1,0 +1,57 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >
+  L@E listen to event and log.
+
+ 
+###############################################################################
+Resources:
+###############################################################################
+
+  
+  TheOriginRequestLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: >
+        Lambda function logging whats happening in cloudfront.
+      Code:
+        ZipFile: |
+          exports.handler = (event, ctx, cb) => {
+            const status = '200'
+            const headers = {
+              'content-type': [{
+                key: 'Content-Type',
+                value: 'application/json'
+              }]
+            }
+            const body = JSON.stringify(event, null, 2)
+            const response = {status, headers, body}
+            console.log(response)
+            cb(null, response)
+          }
+      Handler: index.handler
+      MemorySize: 128
+      Role: !Sub ${TheOriginRequestLambdaFunctionExecutionRole.Arn}
+      Runtime: nodejs14.x
+      
+
+  TheOriginRequestLambdaFunctionVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref TheOriginRequestLambdaFunction
+      Description: !Sub "URL logging"
+
+  TheOriginRequestLambdaFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - edgelambda.amazonaws.com
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
