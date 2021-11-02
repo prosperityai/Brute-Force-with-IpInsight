@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion:  2010-09-09
+
+Description: Resources required for regional resources to ship L@E Logs to a central location via CW Subscription Filters -> Kinesis FireHose
+
+Parameters:
+  LambdaEdgeFunctionName: 
+    Description: The name of the LambdaEdge to apply the subscription filter to.    
+    Type: String
+    MinLength: 1
+  CloudWatchRoleArn: 
+    Description: The CloudWatch role ARN used to apply the subscription filter.   
+    Type: String
+    MinLength: 1
+  FirehoseDestinationArn: 
+    Description: The ARN for the Firehose delivery stream where logs will be aggregated.   
+    Type: String
+    MinLength: 1
+  FilterPattern: 
+    Description: A symbolic description of how CloudWatch Logs should interpret the data in each log event, along with filtering expressions that restrict what gets delivered to the destination AWS resource. Please note - If left blank, the subscription filter will match all log events. 
+    Type: String
+    Default: ''
+Conditions:
+  isLondonRegion: !Equals [ !Ref 'AWS::Region', 'eu-west-2' ]
+  isFrankfurtRegion: !Equals [ !Ref 'AWS::Region', 'eu-central-1' ]
+  isMumbaiRegion: !Equals [ !Ref 'AWS::Region', 'ap-south-1' ]
+  isSeoulRegion: !Equals [ !Ref 'AWS::Region', 'ap-northeast-2' ]
+  isTokyoRegion: !Equals [ !Ref 'AWS::Region', 'ap-northeast-1' ]
+  isSingaporeRegion: !Equals [ !Ref 'AWS::Region', 'ap-southeast-1' ]
+  isSydneyRegion: !Equals [ !Ref 'AWS::Region', 'ap-southeast-2' ]
+  isSaoPauloRegion: !Equals [ !Ref 'AWS::Region', 'sa-east-1' ]
+  isNVirginiaRegion: !Equals [ !Ref 'AWS::Region', 'us-east-1' ]
+  isOhioRegion: !Equals [ !Ref 'AWS::Region', 'us-east-2' ]
+  isOregonRegion: !Equals [ !Ref 'AWS::Region', 'us-west-2' ]
+  IsCloudFrontRegionalCachePt1: !Or # Max of 10 conditions
+    - !Condition isLondonRegion
+    - !Condition isFrankfurtRegion
+    - !Condition isMumbaiRegion
+    - !Condition isSeoulRegion
+    - !Condition isTokyoRegion
+    - !Condition isSingaporeRegion
+    - !Condition isSydneyRegion
+    - !Condition isSaoPauloRegion
+  IsCloudFrontRegionalCachePt2: !Or
+    - !Condition isNVirginiaRegion
+    - !Condition isOhioRegion
+    - !Condition isOregonRegion
+  IsCloudFrontRegionalCache: !Or
+    - !Condition IsCloudFrontRegionalCachePt1
+    - !Condition IsCloudFrontRegionalCachePt2
+
+Resources:
+
+# Key resources that should be deployed where CloudFront has Regional Cache
+
+  RegionalCloudWatchLogGroupCustomResource:
+    Condition: IsCloudFrontRegionalCache
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        ZipFile: >
+          const response = require('cfn-response');
+          const aws = require('aws-sdk');
+          exports.handler = async (event, context, callback) => {
+            const logGroupName = event.ResourceProperties.logGroupName;
+            const cloudwatchlogs = new aws.CloudWatchLogs();
+            const doesLogGroupExist = async (logGroupName) => {
+              console.info(`Verifying if ${logGroupName} exists`)
+              let params = {
+                logGroupNamePrefix: logGroupName
+              }
+              let logGroupStatus = false
+              try {
+                const ret = await cloudwatchlogs.describeLogGroups(params)
+                const logGroups = ret && ret.data && ret.data.logGroups
+                console.log(`Log Group found: ${logGroups}`)
+                if (!logGroups) return logGroupStatus
+                if (logGroups.length > 0) logGroupStatus = true
+
+                return logGroupStatus
+              } catch (error) {
+                console.error(error)
+                return logGroupStatus
+              }
+            }
+            const createLogGroup = async (logGroupName) => {
+              var params = {
+                logGroupName: logGroupName
+              }
+              console.info(`Creating Log Group ${logGroupName}`)
+              return cloudwatchlogs.createLogGroup(params).promise()
+            }
+            if (event.RequestType == 'Delete' || event.RequestType == 'Update') {
+              // don't delete
+              console.info("No action to be taken upon DELETE || UPDATE.")
+              return response.send(event, context, response.SUCCESS, {})
+            }
+            if (event.RequestType == 'Create') {
+              const logGroupExists = await doesLogGroupExist(logGroupName)
+              if (!logGroupExists) {
+                try {
+                  console.info(`Log Group ${logGroupName} doesn't exist`)
+                  await createLogGroup(logGroupName)
+                  console.log(`Log Group ${logGroupName} created successfully`)
+                  return response.send(event, context, response.SUCCESS, {})
+                } catch (error) {
+                  console.error("Error while creating Log Group")
+                  return response.send(event, context, response.FAILED, { error })
+                }
+              } else {
+                console.info(`Log Group ${logGroupName} already exists; ignoring Create signal`)
+                return response.send(event, context, response.SUCCESS, {})
+              }
+            }
+          }
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Timeout: 300
+      Role: !Sub ${RegionalCloudWatchLogGroupCustomResourceRole.Arn}
+
+  RegionalCloudWatchLogGroupCustomResourceRole:
+    Condition: IsCloudFrontRegionalCache
+    Type: AWS::IAM::Role
+    Properties:
+        AssumeRolePolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            -
+                Effect: Allow
+                Principal:
+                    Service: lambda.amazonaws.com
+                Action: 'sts:AssumeRole'
+        Policies:
+          -
+            PolicyName: cloudwatch_log_groups
+            PolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                - 
+                    Effect: Allow
+                    Action:
+                        - 'logs:*' # FIXME - Describe/Create should work
+                    Resource: '*'
+
+  RegionalCloudWatchLogGroup:
+    Condition: IsCloudFrontRegionalCache
+    Type: 'Custom::CloudWatchLogGroupEdge'
+    Properties:
+      ServiceToken: !Sub ${RegionalCloudWatchLogGroupCustomResource.Arn}
+      logGroupName: !Sub '/aws/lambda/us-east-1.${LambdaEdgeFunctionName}'
+
+  SubscriptionFilter:
+    Condition: IsCloudFrontRegionalCache
+    Type: AWS::Logs::SubscriptionFilter
+    Properties: 
+        DestinationArn: !Ref FirehoseDestinationArn
+        FilterPattern: !Ref FilterPattern
+        LogGroupName: !Sub '/aws/lambda/us-east-1.${LambdaEdgeFunctionName}'
+        RoleArn: !Ref CloudWatchRoleArn
+    DependsOn: RegionalCloudWatchLogGroup
+# Key resources that should be deployed where CloudFront has Regional Cache
+
+Outputs:
+
+  RegionalCloudWatchLogGroup:
+    Condition: IsCloudFrontRegionalCache
+    Description: Custom Resource for CloudWatch Log Group
+    Value: !Sub ${RegionalCloudWatchLogGroupCustomResource.Arn}
