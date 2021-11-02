@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: Main resources required to aggregate L@E Logs will create Kinesis Firehose ,Output s3,cloudwatch sub-filters
+Description: Main resources to aggregate L@E Logs
 
 Parameters:
   Stage:

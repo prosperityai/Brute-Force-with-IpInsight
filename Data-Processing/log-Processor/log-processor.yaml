@@ -1,0 +1,23 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: >-
+  An Amazon Kinesis Firehose stream processor that converts input to CSV.
+Parameters: 
+  FunctionNameParameter: 
+    Type: String
+Resources:
+  kinesisfirehoseapachelogtocsv:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      Description: >-
+          An Amazon Kinesis Firehose stream processor that converts input to CSV.
+
+      
+      Handler: index.handler
+      Runtime: nodejs12.x
+      MemorySize: 128
+      Timeout: 60
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref FunctionNameParameter
+        
